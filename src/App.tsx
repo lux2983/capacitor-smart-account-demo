@@ -45,6 +45,20 @@ type TransferState =
     };
 
 const MAX_LOGS = 14;
+const RESTORE_TIMEOUT_MS = 10_000;
+const REAUTH_TIMEOUT_MS = 30_000;
+
+class OperationTimeoutError extends Error {
+  readonly operation: Operation;
+  readonly timeoutMs: number;
+
+  constructor(operation: Operation, timeoutMs: number) {
+    super(`${operation} timed out after ${timeoutMs}ms`);
+    this.name = 'OperationTimeoutError';
+    this.operation = operation;
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 function nowTime(): string {
   return new Date().toLocaleTimeString();
@@ -103,7 +117,41 @@ function getPluginErrorCode(error: unknown): PluginErrorCode | undefined {
   return value as PluginErrorCode;
 }
 
+async function withOperationTimeout<T>(
+  promise: Promise<T>,
+  operation: Operation,
+  timeoutMs: number,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new OperationTimeoutError(operation, timeoutMs));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function normalizeErrorMessage(operation: Operation, error: unknown): string {
+  if (error instanceof OperationTimeoutError) {
+    switch (error.operation) {
+      case 'restore':
+        return 'Session restore timed out. You can continue manually.';
+      case 'reauth':
+        return 'Re-authentication timed out. Try Connect Wallet again.';
+      default:
+        return `${error.operation} timed out. Please retry.`;
+    }
+  }
+
   const pluginErrorCode = getPluginErrorCode(error);
   if (pluginErrorCode) {
     switch (pluginErrorCode) {
@@ -208,7 +256,7 @@ export function App() {
         const session = await storage.getSession();
         const hadExpiredSession = Boolean(session?.expiresAt && Date.now() > session.expiresAt);
 
-        const connected = await kit.connectWallet();
+        const connected = await withOperationTimeout(kit.connectWallet(), 'restore', RESTORE_TIMEOUT_MS);
         if (cancelled) {
           return;
         }
@@ -224,7 +272,11 @@ export function App() {
           pushLog('Previous session expired. Requesting interactive passkey authentication.', 'info');
           setBusy('reauth');
           try {
-            const prompted = await kit.connectWallet({ prompt: true, fresh: true });
+            const prompted = await withOperationTimeout(
+              kit.connectWallet({ prompt: true, fresh: true }),
+              'reauth',
+              REAUTH_TIMEOUT_MS,
+            );
             if (prompted) {
               setContractId(prompted.contractId);
               setCredentialId(prompted.credentialId);
