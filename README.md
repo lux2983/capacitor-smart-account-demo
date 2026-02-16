@@ -2,12 +2,27 @@
 
 Standalone Capacitor reference app for Smart Account Kit + `capacitor-passkey-plugin`.
 
+## Current Status
+
+- This project is in pre-release testing and external review.
+- Planned release window: March 2026.
+- Do not treat this repository as a final production release yet.
+
 ## Prerequisites
 
 - Node.js 22+
 - npm 10+
 - Xcode (for iOS)
 - Android SDK + Android Studio (for Android)
+
+### Android Local Build Environment
+
+Set Android SDK environment variables before running Android verification locally:
+
+```bash
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+```
 
 ## Setup
 
@@ -49,8 +64,15 @@ Standalone Capacitor reference app for Smart Account Kit + `capacitor-passkey-pl
   3. Run `npm install`.
   4. Run `npm run sync`.
   5. Re-run native verification (`npm run verify:ios` and `npm run verify:android`).
+- On a fresh machine, the first Android verify run downloads the Gradle wrapper from `services.gradle.org`, so network access is required for that first run.
 - Passkey domain validation on real devices requires control over the configured RP domain.
 - This demo is configured for `soneso.com`; if you use another domain, update env/config plus iOS Associated Domains and Android Digital Asset Links for that domain.
+- For reviewer handoff, use this baseline sequence:
+  1. `npm ci`
+  2. `npm run build`
+  3. `npm run sync`
+  4. `npm run verify:ios`
+  5. `npm run verify:android`
 
 ## Passkey Platform Config
 
