@@ -4,4 +4,9 @@
     <string name="title_activity_main">Smart Account Demo</string>
     <string name="package_name">com.lux2983.smartaccountdemo</string>
     <string name="custom_url_scheme">com.lux2983.smartaccountdemo</string>
+    <string name="asset_statements" translatable="false">
+        [{
+          \"include\": \"https://soneso.com/.well-known/assetlinks.json\"
+        }]
+    </string>
 </resources>

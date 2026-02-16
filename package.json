@@ -1,6 +1,6 @@
 {
   "name": "capacitor-smart-account-demo",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "Standalone Capacitor reference app for Smart Account Kit + capacitor-passkey-plugin",

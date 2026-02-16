@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.2] - 2026-02-16
+
+### Changed
+- Added iOS associated domains entitlement (`webcredentials:soneso.com`) and enabled entitlements in Xcode build settings.
+- Added iOS Face ID usage description for passkey authentication prompts.
+- Added Android Digital Asset Links wiring (`asset_statements` + `autoVerify` intent filter for `soneso.com`).
+- Added Android biometric and NFC permissions for passkey and hardware key scenarios.
+- Switched default `rpId` to `soneso.com` for mobile debug alignment with hosted `.well-known` files.
+
 ## [0.2.1] - 2026-02-16
 
 ### Changed

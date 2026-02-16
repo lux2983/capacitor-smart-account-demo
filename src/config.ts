@@ -21,7 +21,7 @@ const TESTNET_DEFAULTS = {
   thresholdPolicyAddress: 'CCT4MMN5MJ6O2OU6LXPYTCVORQ2QVTBMDJ7MYBZQ2ULSYQVUIYP4IFYD',
   spendingLimitPolicyAddress: 'CBMMWY54XOV6JJHSWCMKWWPXVRXASR5U26UJMLZDN4SP6CFFTVZARPTY',
   weightedThresholdPolicyAddress: 'CBYDQ5XUBP7G24FI3LLGLW56QZCIEUSVRPX7FVOUCKHJQQ6DTF6BQGBZ',
-  rpId: 'localhost',
+  rpId: 'soneso.com',
   rpName: 'Smart Account Demo',
 } as const;
 
