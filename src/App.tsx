@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SmartAccountError, SmartAccountErrorCode, validateAddress, validateAmount } from 'smart-account-kit';
 import type { TransactionResult } from 'smart-account-kit';
-import { CapacitorStorageAdapter } from 'capacitor-passkey-plugin/storage';
 import { createKit } from './kit';
 import { getConfig } from './config';
 
@@ -51,6 +50,7 @@ const CREATE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const TRANSFER_TIMEOUT_MS = 60_000;
 const DISCONNECT_TIMEOUT_MS = 10_000;
+const SESSION_SNAPSHOT_KEY = 'smart-account-demo:session-snapshot:v1';
 
 class OperationTimeoutError extends Error {
   readonly operation: Operation;
@@ -63,6 +63,12 @@ class OperationTimeoutError extends Error {
     this.timeoutMs = timeoutMs;
   }
 }
+
+type SessionSnapshot = {
+  contractId: string;
+  credentialId: string;
+  updatedAt: number;
+};
 
 function nowTime(): string {
   return new Date().toLocaleTimeString();
@@ -219,6 +225,61 @@ function toTransferError(result: TransactionResult): string {
   return 'Transfer failed with an unknown error.';
 }
 
+function readSessionSnapshot(): SessionSnapshot | null {
+  try {
+    if (typeof localStorage === 'undefined') {
+      return null;
+    }
+
+    const raw = localStorage.getItem(SESSION_SNAPSHOT_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<SessionSnapshot>;
+    if (typeof parsed.contractId !== 'string' || typeof parsed.credentialId !== 'string') {
+      return null;
+    }
+
+    return {
+      contractId: parsed.contractId,
+      credentialId: parsed.credentialId,
+      updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionSnapshot(contractId: string, credentialId: string): void {
+  try {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    localStorage.setItem(
+      SESSION_SNAPSHOT_KEY,
+      JSON.stringify({
+        contractId,
+        credentialId,
+        updatedAt: Date.now(),
+      } satisfies SessionSnapshot),
+    );
+  } catch {
+    // Best-effort cache only; ignore localStorage failures.
+  }
+}
+
+function clearSessionSnapshot(): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(SESSION_SNAPSHOT_KEY);
+    }
+  } catch {
+    // Ignore localStorage failures on cleanup.
+  }
+}
+
 export function App() {
   const config = useMemo(() => getConfig(), []);
   const kit = useMemo(() => createKit(config), [config]);
@@ -300,10 +361,6 @@ export function App() {
       setRestoring(true);
 
       try {
-        const storage = new CapacitorStorageAdapter('smart-account-demo');
-        const session = await storage.getSession();
-        const hadExpiredSession = Boolean(session?.expiresAt && Date.now() > session.expiresAt);
-
         const connected = await withOperationTimeout(kit.connectWallet(), 'restore', RESTORE_TIMEOUT_MS);
         if (cancelled) {
           return;
@@ -312,33 +369,33 @@ export function App() {
         if (connected) {
           setContractId(connected.contractId);
           setCredentialId(connected.credentialId);
+          writeSessionSnapshot(connected.contractId, connected.credentialId);
           pushLog('Restored previous wallet session.', 'success');
           return;
         }
 
-        if (hadExpiredSession) {
-          pushLog('Previous session expired. Requesting interactive passkey authentication.', 'info');
-          setBusy('reauth');
-          try {
-            const prompted = await withOperationTimeout(
-              kit.connectWallet({ prompt: true, fresh: true }),
-              'reauth',
-              REAUTH_TIMEOUT_MS,
-            );
-            if (prompted) {
-              setContractId(prompted.contractId);
-              setCredentialId(prompted.credentialId);
-              pushLog(`Reconnected after session expiry: ${truncate(prompted.contractId)}`, 'success');
-            } else {
-              pushLog('No wallet selected after session expiry.', 'error');
-            }
-          } finally {
-            if (!cancelled) {
-              setBusy(null);
-            }
+        const snapshot = readSessionSnapshot();
+        if (snapshot) {
+          pushLog('No SDK session found. Trying local restore snapshot.', 'info');
+          const snapshotConnected = await withOperationTimeout(
+            kit.connectWallet({
+              credentialId: snapshot.credentialId,
+              contractId: snapshot.contractId,
+            }),
+            'restore',
+            RESTORE_TIMEOUT_MS,
+          );
+          if (cancelled) {
+            return;
           }
 
-          return;
+          if (snapshotConnected) {
+            setContractId(snapshotConnected.contractId);
+            setCredentialId(snapshotConnected.credentialId);
+            writeSessionSnapshot(snapshotConnected.contractId, snapshotConnected.credentialId);
+            pushLog(`Restored via snapshot: ${truncate(snapshotConnected.contractId)}`, 'success');
+            return;
+          }
         }
 
         pushLog('No previous session found. Connect or create a wallet.', 'info');
@@ -371,12 +428,13 @@ export function App() {
 
       pushLog('Starting wallet creation (passkey + deployment)...', 'info');
       const result = await withOperationTimeout(
-        kit.createWallet(config.rpName, trimmedName),
+        kit.createWallet(config.rpName, trimmedName, { autoSubmit: true }),
         'create',
         CREATE_TIMEOUT_MS,
       );
       setContractId(result.contractId);
       setCredentialId(result.credentialId);
+      writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
 
       pushLog(`Wallet created: ${truncate(result.contractId)}`, 'success');
@@ -401,6 +459,7 @@ export function App() {
 
       setContractId(result.contractId);
       setCredentialId(result.credentialId);
+      writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
       pushLog(`Connected wallet: ${truncate(result.contractId)}`, 'success');
     });
@@ -451,6 +510,7 @@ export function App() {
       await withOperationTimeout(kit.disconnect(), 'disconnect', DISCONNECT_TIMEOUT_MS);
       setContractId(null);
       setCredentialId(null);
+      clearSessionSnapshot();
       setTransferState({ status: 'idle' });
       pushLog('Disconnected from wallet.', 'success');
     });
