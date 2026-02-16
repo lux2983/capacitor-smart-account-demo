@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.coverage/
+.DS_Store
+.env
+.env.*
+!.env.example
+android/.gradle/
+android/local.properties
+ios/App/App/public/
+ios/App/build/

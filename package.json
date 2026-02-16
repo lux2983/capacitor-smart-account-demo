@@ -1,0 +1,11 @@
+{
+  "name": "capacitor-smart-account-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Capacitor reference demo for Smart Account Kit",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "echo \"Scaffold only - app implementation pending\"",
+    "test": "echo \"No tests yet\""
+  }
+}
