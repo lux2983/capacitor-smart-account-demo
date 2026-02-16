@@ -1,6 +1,6 @@
 {
   "name": "capacitor-smart-account-demo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Standalone Capacitor reference app for Smart Account Kit + capacitor-passkey-plugin",
@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "sync": "npx cap sync && node scripts/patch-ios-spm.mjs",
+    "sync": "npx cap sync",
     "open:ios": "npx cap open ios",
     "open:android": "npx cap open android",
     "verify:ios": "xcodebuild -project ios/App/App.xcodeproj -scheme App -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build",
@@ -20,7 +20,7 @@
     "@capacitor/preferences": "8.0.0",
     "@stellar/stellar-sdk": "^14.4.3",
     "buffer": "^6.0.3",
-    "capacitor-passkey-plugin": "^0.0.5",
+    "capacitor-passkey-plugin": "file:vendor/capacitor-passkey-plugin-1.0.0.tgz",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "smart-account-kit": "^0.2.9"

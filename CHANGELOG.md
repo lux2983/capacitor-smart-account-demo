@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3] - 2026-02-16
+
+### Changed
+- Switched `capacitor-passkey-plugin` dependency from npm `0.0.5` to a vendored local tarball (`vendor/capacitor-passkey-plugin-1.0.0.tgz`) to support non-published plugin integration.
+- Removed temporary Vite alias shims for `capacitor-passkey-plugin/adapter` and `capacitor-passkey-plugin/storage` now that those exports are consumed directly from the plugin package.
+- Removed demo-side iOS sync patch script; sync now runs with plain `npx cap sync`.
+
 ## [0.2.2] - 2026-02-16
 
 ### Changed

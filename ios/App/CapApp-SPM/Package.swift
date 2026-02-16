@@ -22,7 +22,7 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
                 .product(name: "CapacitorPreferences", package: "CapacitorPreferences"),
-                .product(name: "PasskeyPlugin", package: "CapacitorPasskeyPlugin")
+                .product(name: "CapacitorPasskeyPlugin", package: "CapacitorPasskeyPlugin")
             ]
         )
     ]

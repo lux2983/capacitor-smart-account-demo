@@ -37,8 +37,8 @@ Standalone Capacitor reference app for Smart Account Kit + `capacitor-passkey-pl
 
 ## Notes
 
-- The current npm release of `capacitor-passkey-plugin` (`0.0.5`) does not yet expose `./adapter` and `./storage` exports.
-- This repo maps those import paths to local shims in `src/passkey/` via Vite alias until the next plugin npm release.
+- This demo intentionally pins a vendored plugin tarball at `vendor/capacitor-passkey-plugin-1.0.0.tgz`.
+- This avoids npm publishing requirements while still consuming the Smart Account adapter/storage exports from the forked plugin code.
 
 ## Passkey Platform Config
 

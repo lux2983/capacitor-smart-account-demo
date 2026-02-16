@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { SmartAccountError, SmartAccountErrorCode, validateAddress, validateAmount } from 'smart-account-kit';
 import type { TransactionResult } from 'smart-account-kit';
 import { CapacitorStorageAdapter } from 'capacitor-passkey-plugin/storage';
-import { PasskeyError } from './passkey/errors';
 import { createKit } from './kit';
 import { getConfig } from './config';
 
@@ -15,6 +14,18 @@ type LogEntry = {
 };
 
 type Operation = 'restore' | 'reauth' | 'create' | 'connect' | 'transfer' | 'disconnect';
+type PluginErrorCode =
+  | 'UNKNOWN_ERROR'
+  | 'CANCELLED'
+  | 'DOM_ERROR'
+  | 'UNSUPPORTED_ERROR'
+  | 'TIMEOUT'
+  | 'NO_CREDENTIAL'
+  | 'INVALID_INPUT'
+  | 'RPID_VALIDATION_ERROR'
+  | 'PROVIDER_CONFIG_ERROR'
+  | 'INTERRUPTED'
+  | 'NO_ACTIVITY';
 
 type TransferState =
   | { status: 'idle' }
@@ -47,9 +58,55 @@ function truncate(value: string, size: number = 10): string {
   return `${value.slice(0, size)}...${value.slice(-size)}`;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const value = (error as { message?: unknown }).message;
+    if (typeof value === 'string') {
+      return value;
+    }
+  }
+
+  return 'Passkey operation failed';
+}
+
+function getPluginErrorCode(error: unknown): PluginErrorCode | undefined {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+
+  const value =
+    (error as { pluginErrorCode?: unknown }).pluginErrorCode ??
+    (error as { code?: unknown }).code;
+
+  const knownCodes: PluginErrorCode[] = [
+    'UNKNOWN_ERROR',
+    'CANCELLED',
+    'DOM_ERROR',
+    'UNSUPPORTED_ERROR',
+    'TIMEOUT',
+    'NO_CREDENTIAL',
+    'INVALID_INPUT',
+    'RPID_VALIDATION_ERROR',
+    'PROVIDER_CONFIG_ERROR',
+    'INTERRUPTED',
+    'NO_ACTIVITY',
+  ];
+
+  if (typeof value !== 'string' || !knownCodes.includes(value as PluginErrorCode)) {
+    return undefined;
+  }
+
+  return value as PluginErrorCode;
+}
+
 function normalizeErrorMessage(operation: Operation, error: unknown): string {
-  if (error instanceof PasskeyError) {
-    switch (error.pluginErrorCode) {
+  const pluginErrorCode = getPluginErrorCode(error);
+  if (pluginErrorCode) {
+    switch (pluginErrorCode) {
       case 'CANCELLED':
       case 'DOM_ERROR':
       case 'NO_CREDENTIAL':
@@ -63,9 +120,9 @@ function normalizeErrorMessage(operation: Operation, error: unknown): string {
       case 'UNSUPPORTED_ERROR':
         return 'Passkeys are not supported on this device configuration.';
       case 'INVALID_INPUT':
-        return `Invalid input for ${operation}: ${error.message}`;
+        return `Invalid input for ${operation}: ${getErrorMessage(error)}`;
       default:
-        return error.message;
+        return getErrorMessage(error);
     }
   }
 
