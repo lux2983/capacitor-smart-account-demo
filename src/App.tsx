@@ -47,6 +47,10 @@ type TransferState =
 const MAX_LOGS = 14;
 const RESTORE_TIMEOUT_MS = 10_000;
 const REAUTH_TIMEOUT_MS = 30_000;
+const CREATE_TIMEOUT_MS = 90_000;
+const CONNECT_TIMEOUT_MS = 45_000;
+const TRANSFER_TIMEOUT_MS = 60_000;
+const DISCONNECT_TIMEOUT_MS = 10_000;
 
 class OperationTimeoutError extends Error {
   readonly operation: Operation;
@@ -147,6 +151,14 @@ function normalizeErrorMessage(operation: Operation, error: unknown): string {
         return 'Session restore timed out. You can continue manually.';
       case 'reauth':
         return 'Re-authentication timed out. Try Connect Wallet again.';
+      case 'create':
+        return 'Wallet creation timed out. Check passkey prompt visibility and network/relayer status, then retry.';
+      case 'connect':
+        return 'Wallet connection timed out. Try Connect Wallet again.';
+      case 'transfer':
+        return 'Transfer timed out before confirmation. Check network status and retry.';
+      case 'disconnect':
+        return 'Disconnect timed out. Try again.';
       default:
         return `${error.operation} timed out. Please retry.`;
     }
@@ -321,7 +333,12 @@ export function App() {
         throw new Error('Enter a username before creating a wallet.');
       }
 
-      const result = await kit.createWallet(config.rpName, trimmedName);
+      pushLog('Starting wallet creation (passkey + deployment)...', 'info');
+      const result = await withOperationTimeout(
+        kit.createWallet(config.rpName, trimmedName),
+        'create',
+        CREATE_TIMEOUT_MS,
+      );
       setContractId(result.contractId);
       setCredentialId(result.credentialId);
       setTransferState({ status: 'idle' });
@@ -337,7 +354,11 @@ export function App() {
 
   const handleConnectWallet = () =>
     runOperation('connect', async () => {
-      const result = await kit.connectWallet({ prompt: true });
+      const result = await withOperationTimeout(
+        kit.connectWallet({ prompt: true }),
+        'connect',
+        CONNECT_TIMEOUT_MS,
+      );
       if (!result) {
         throw new Error('No wallet connected.');
       }
@@ -356,7 +377,11 @@ export function App() {
       validateAddress(trimmedRecipient, 'recipient');
       validateAmount(numericAmount, 'amount');
 
-      const result = await kit.transfer(config.nativeTokenContract, trimmedRecipient, numericAmount);
+      const result = await withOperationTimeout(
+        kit.transfer(config.nativeTokenContract, trimmedRecipient, numericAmount),
+        'transfer',
+        TRANSFER_TIMEOUT_MS,
+      );
       if (result.success) {
         setTransferState({
           status: 'success',
@@ -387,7 +412,7 @@ export function App() {
 
   const handleDisconnect = () =>
     runOperation('disconnect', async () => {
-      await kit.disconnect();
+      await withOperationTimeout(kit.disconnect(), 'disconnect', DISCONNECT_TIMEOUT_MS);
       setContractId(null);
       setCredentialId(null);
       setTransferState({ status: 'idle' });
