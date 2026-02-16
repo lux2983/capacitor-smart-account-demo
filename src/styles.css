@@ -37,6 +37,23 @@ h2 {
   margin: 0.3rem 0 1rem;
 }
 
+.banner {
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+.banner.info {
+  background: rgba(64, 108, 176, 0.22);
+  border: 1px solid rgba(121, 156, 214, 0.3);
+}
+
+.banner.error {
+  background: rgba(176, 58, 73, 0.28);
+  border: 1px solid rgba(212, 95, 109, 0.35);
+}
+
 .grid {
   display: grid;
   gap: 0.75rem;
@@ -89,6 +106,12 @@ button:disabled {
   word-break: break-word;
 }
 
+.transfer-status {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(134, 165, 219, 0.2);
+}
+
 .logs ul {
   list-style: none;
   margin: 0.75rem 0 0;
@@ -102,6 +125,8 @@ button:disabled {
   padding: 0.5rem 0.65rem;
   font-size: 0.9rem;
   word-break: break-word;
+  display: grid;
+  gap: 0.2rem;
 }
 
 .logs li.info {
@@ -114,6 +139,11 @@ button:disabled {
 
 .logs li.error {
   background: rgba(176, 58, 73, 0.35);
+}
+
+.timestamp {
+  font-size: 0.75rem;
+  color: #a8bbdf;
 }
 
 @media (max-width: 640px) {

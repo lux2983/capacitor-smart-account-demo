@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - 2026-02-16
+
+### Changed
+- Hardened wallet operation flows with explicit operation-state handling and banner-level error feedback.
+- Added session-expiry fallback behavior to trigger interactive reconnect when an expired stored session is detected.
+- Improved transfer UX with strict recipient/amount validation and structured last-transfer result details (hash/ledger/error).
+- Expanded log entries with timestamps and clearer operation-scoped error messages.
+
 ## [0.2.0] - 2026-02-16
 
 ### Added
