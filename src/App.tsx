@@ -263,16 +263,34 @@ function formatStroopsAsXlm(stroops: bigint): string {
   return `${negative ? '-' : ''}${whole.toString()}${fractional ? `.${fractional}` : ''}`;
 }
 
-function isMissingBalanceError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
+function getUnknownErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    return error.message;
   }
 
-  const message = error.message.toLowerCase();
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const value = (error as { message?: unknown }).message;
+    if (typeof value === 'string' && value.length > 0) {
+      return value;
+    }
+  }
+
+  if (typeof error === 'string' && error.length > 0) {
+    return error;
+  }
+
+  return fallback;
+}
+
+function isMissingBalanceError(error: unknown): boolean {
+  const message = getUnknownErrorMessage(error, '').toLowerCase();
   return (
     message.includes('not found') ||
     message.includes('resource missing') ||
-    message.includes('missing entry')
+    message.includes('missing entry') ||
+    message.includes('missingvalue') ||
+    message.includes('entry does not exist') ||
+    message.includes('ledger entry')
   );
 }
 
@@ -296,21 +314,50 @@ async function fetchNativeBalanceXlm(
     );
     const value = balanceData.val.contractData().val();
 
-    if (value.switch().name !== 'scvI128') {
-      throw new Error(`Unexpected balance value type: ${value.switch().name}`);
+    if (value.switch().name === 'scvI128') {
+      const i128 = value.i128();
+      const hi = BigInt(i128.hi().toString());
+      const lo = BigInt(i128.lo().toString());
+      const stroops = (hi << 64n) + lo;
+      return formatStroopsAsXlm(stroops);
     }
 
-    const i128 = value.i128();
-    const hi = BigInt(i128.hi().toString());
-    const lo = BigInt(i128.lo().toString());
-    const stroops = (hi * (1n << 64n)) + lo;
+    if (value.switch().name === 'scvU128') {
+      const u128 = value.u128();
+      const hi = BigInt(u128.hi().toString());
+      const lo = BigInt(u128.lo().toString());
+      const stroops = (hi << 64n) + lo;
+      return formatStroopsAsXlm(stroops);
+    }
 
-    return formatStroopsAsXlm(stroops);
+    if (value.switch().name === 'scvI64') {
+      return formatStroopsAsXlm(BigInt(value.i64().toString()));
+    }
+
+    if (value.switch().name === 'scvU64') {
+      return formatStroopsAsXlm(BigInt(value.u64().toString()));
+    }
+
+    if (value.switch().name === 'scvI32') {
+      return formatStroopsAsXlm(BigInt(value.i32()));
+    }
+
+    if (value.switch().name === 'scvU32') {
+      return formatStroopsAsXlm(BigInt(value.u32()));
+    }
+
+    if (value.switch().name === 'scvVoid') {
+      return '0';
+    }
+
+    {
+      throw new Error(`Unexpected balance value type: ${value.switch().name}`);
+    }
   } catch (error) {
     if (isMissingBalanceError(error)) {
       return '0';
     }
-    throw error;
+    throw new Error(getUnknownErrorMessage(error, 'Failed to load balance'));
   }
 }
 
@@ -423,7 +470,7 @@ export function App() {
         updatedAt: Date.now(),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load balance';
+      const message = getUnknownErrorMessage(error, 'Failed to load balance');
       setBalance({ status: 'error', error: message });
       if (logErrors) {
         pushLog(`balance: ${message}`, 'error');
@@ -498,8 +545,9 @@ export function App() {
           return;
         }
 
-        const message = error instanceof Error ? error.message : 'Failed to load balance';
+        const message = getUnknownErrorMessage(error, 'Failed to load balance');
         setBalance({ status: 'error', error: message });
+        pushLog(`balance: ${message}`, 'error');
       }
     })();
 
@@ -582,7 +630,11 @@ export function App() {
 
       pushLog('Starting wallet creation (passkey + deployment)...', 'info');
       const result = await withOperationTimeout(
-        kit.createWallet(config.rpName, trimmedName, { autoSubmit: true }),
+        kit.createWallet(config.rpName, trimmedName, {
+          autoSubmit: true,
+          autoFund: true,
+          nativeTokenContract: config.nativeTokenContract,
+        }),
         'create',
         CREATE_TIMEOUT_MS,
       );
@@ -598,6 +650,12 @@ export function App() {
       }
       if (result.submitResult && !result.submitResult.success) {
         pushLog(`Deployment failed: ${result.submitResult.error ?? 'unknown deployment error'}`, 'error');
+      }
+      if (result.fundResult?.success) {
+        pushLog(`Wallet funded: ${result.fundResult.amount ?? 'unknown'} XLM`, 'success');
+      }
+      if (result.fundResult && !result.fundResult.success) {
+        pushLog(`Funding failed: ${result.fundResult.error ?? 'unknown funding error'}`, 'error');
       }
     });
 
