@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SmartAccountError, SmartAccountErrorCode, validateAddress, validateAmount } from 'smart-account-kit';
 import type { TransactionResult } from 'smart-account-kit';
+import { Address, rpc, xdr } from '@stellar/stellar-sdk';
 import { createKit } from './kit';
 import { getConfig } from './config';
 
@@ -43,6 +44,12 @@ type TransferState =
       hash?: string;
     };
 
+type BalanceState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; valueXlm: string; updatedAt: number }
+  | { status: 'error'; error: string };
+
 const MAX_LOGS = 14;
 const RESTORE_TIMEOUT_MS = 10_000;
 const REAUTH_TIMEOUT_MS = 30_000;
@@ -50,7 +57,9 @@ const CREATE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const TRANSFER_TIMEOUT_MS = 60_000;
 const DISCONNECT_TIMEOUT_MS = 10_000;
+const BALANCE_TIMEOUT_MS = 15_000;
 const SESSION_SNAPSHOT_KEY = 'smart-account-demo:session-snapshot:v1';
+const STROOPS_PER_XLM = 10_000_000n;
 
 class OperationTimeoutError extends Error {
   readonly operation: Operation;
@@ -150,6 +159,25 @@ async function withOperationTimeout<T>(
   });
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function normalizeErrorMessage(operation: Operation, error: unknown): string {
   if (error instanceof OperationTimeoutError) {
     switch (error.operation) {
@@ -225,6 +253,67 @@ function toTransferError(result: TransactionResult): string {
   return 'Transfer failed with an unknown error.';
 }
 
+function formatStroopsAsXlm(stroops: bigint): string {
+  const negative = stroops < 0n;
+  const absolute = negative ? -stroops : stroops;
+  const whole = absolute / STROOPS_PER_XLM;
+  const fractionalRaw = (absolute % STROOPS_PER_XLM).toString().padStart(7, '0');
+  const fractional = fractionalRaw.replace(/0+$/, '');
+
+  return `${negative ? '-' : ''}${whole.toString()}${fractional ? `.${fractional}` : ''}`;
+}
+
+function isMissingBalanceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('not found') ||
+    message.includes('resource missing') ||
+    message.includes('missing entry')
+  );
+}
+
+async function fetchNativeBalanceXlm(
+  rpcUrl: string,
+  nativeTokenContract: string,
+  ownerAddress: string,
+): Promise<string> {
+  const server = new rpc.Server(rpcUrl);
+  const owner = Address.fromString(ownerAddress);
+  const balanceKey = xdr.ScVal.scvVec([
+    xdr.ScVal.scvSymbol('Balance'),
+    xdr.ScVal.scvAddress(owner.toScAddress()),
+  ]);
+
+  try {
+    const balanceData = await withTimeout(
+      server.getContractData(nativeTokenContract, balanceKey),
+      BALANCE_TIMEOUT_MS,
+      'balance query',
+    );
+    const value = balanceData.val.contractData().val();
+
+    if (value.switch().name !== 'scvI128') {
+      throw new Error(`Unexpected balance value type: ${value.switch().name}`);
+    }
+
+    const i128 = value.i128();
+    const hi = BigInt(i128.hi().toString());
+    const lo = BigInt(i128.lo().toString());
+    const stroops = (hi * (1n << 64n)) + lo;
+
+    return formatStroopsAsXlm(stroops);
+  } catch (error) {
+    if (isMissingBalanceError(error)) {
+      return '0';
+    }
+    throw error;
+  }
+}
+
 function readSessionSnapshot(): SessionSnapshot | null {
   try {
     if (typeof localStorage === 'undefined') {
@@ -294,6 +383,7 @@ export function App() {
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [transferState, setTransferState] = useState<TransferState>({ status: 'idle' });
+  const [balance, setBalance] = useState<BalanceState>({ status: 'idle' });
 
   const pushLog = (message: string, type: LogType = 'info') => {
     setLogs((current) => [{ message, type, timestamp: nowTime() }, ...current].slice(0, MAX_LOGS));
@@ -315,6 +405,29 @@ export function App() {
       pushLog(`${operation}: ${message}`, 'error');
     } finally {
       setBusy(null);
+    }
+  };
+
+  const refreshBalance = async (targetContractId: string, logErrors: boolean = false) => {
+    setBalance({ status: 'loading' });
+
+    try {
+      const valueXlm = await fetchNativeBalanceXlm(
+        config.rpcUrl,
+        config.nativeTokenContract,
+        targetContractId,
+      );
+      setBalance({
+        status: 'ready',
+        valueXlm,
+        updatedAt: Date.now(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load balance';
+      setBalance({ status: 'error', error: message });
+      if (logErrors) {
+        pushLog(`balance: ${message}`, 'error');
+      }
     }
   };
 
@@ -353,6 +466,47 @@ export function App() {
       }
     };
   }, [kit]);
+
+  useEffect(() => {
+    if (!contractId) {
+      setBalance({ status: 'idle' });
+      return;
+    }
+
+    let cancelled = false;
+    setBalance({ status: 'loading' });
+
+    void (async () => {
+      try {
+        const valueXlm = await fetchNativeBalanceXlm(
+          config.rpcUrl,
+          config.nativeTokenContract,
+          contractId,
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        setBalance({
+          status: 'ready',
+          valueXlm,
+          updatedAt: Date.now(),
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        const message = error instanceof Error ? error.message : 'Failed to load balance';
+        setBalance({ status: 'error', error: message });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [contractId, config.nativeTokenContract, config.rpcUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -436,6 +590,7 @@ export function App() {
       setCredentialId(result.credentialId);
       writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
+      void refreshBalance(result.contractId);
 
       pushLog(`Wallet created: ${truncate(result.contractId)}`, 'success');
       if (result.submitResult?.success) {
@@ -461,6 +616,7 @@ export function App() {
       setCredentialId(result.credentialId);
       writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
+      void refreshBalance(result.contractId);
       pushLog(`Connected wallet: ${truncate(result.contractId)}`, 'success');
     });
 
@@ -490,6 +646,9 @@ export function App() {
           `Transfer submitted (${numericAmount} XLM -> ${truncate(trimmedRecipient)}): ${result.hash}`,
           'success',
         );
+        if (contractId) {
+          void refreshBalance(contractId);
+        }
         return;
       }
 
@@ -512,6 +671,7 @@ export function App() {
       setCredentialId(null);
       clearSessionSnapshot();
       setTransferState({ status: 'idle' });
+      setBalance({ status: 'idle' });
       pushLog('Disconnected from wallet.', 'success');
     });
 
@@ -579,8 +739,26 @@ export function App() {
         <div className="status">
           <p><strong>Contract:</strong> {contractId ?? 'Not connected'}</p>
           <p><strong>Credential:</strong> {credentialId ?? 'Not connected'}</p>
+          <p>
+            <strong>Balance:</strong>{' '}
+            {balance.status === 'idle' ? 'Not connected' : null}
+            {balance.status === 'loading' ? 'Loading...' : null}
+            {balance.status === 'ready' ? `${balance.valueXlm} XLM` : null}
+            {balance.status === 'error' ? `Error: ${balance.error}` : null}
+          </p>
           <p><strong>RP:</strong> {config.rpName} ({config.rpId})</p>
           <p><strong>RPC:</strong> {config.rpcUrl}</p>
+          <button
+            className="balance-refresh"
+            onClick={() => {
+              if (contractId) {
+                void refreshBalance(contractId, true);
+              }
+            }}
+            disabled={isBusy || !isConnected || balance.status === 'loading'}
+          >
+            {balance.status === 'loading' ? 'Refreshing Balance...' : 'Refresh Balance'}
+          </button>
         </div>
 
         <div className="status transfer-status">

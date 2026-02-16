@@ -106,6 +106,13 @@ button:disabled {
   word-break: break-word;
 }
 
+.balance-refresh {
+  margin-top: 0.45rem;
+  width: fit-content;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+}
+
 .transfer-status {
   margin-top: 0.9rem;
   padding-top: 0.9rem;
