@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Smart Account Demo</string>
+    <string name="title_activity_main">Smart Account Demo</string>
+    <string name="package_name">com.lux2983.smartaccountdemo</string>
+    <string name="custom_url_scheme">com.lux2983.smartaccountdemo</string>
+</resources>
