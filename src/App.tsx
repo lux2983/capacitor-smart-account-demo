@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { SmartAccountError, SmartAccountErrorCode, validateAddress, validateAmount } from 'smart-account-kit';
 import type { TransactionResult } from 'smart-account-kit';
-import { Address, rpc, xdr } from '@stellar/stellar-sdk';
+import {
+  Address,
+  BASE_FEE,
+  Contract,
+  Keypair,
+  TransactionBuilder,
+  nativeToScVal,
+  rpc,
+  scValToNative,
+  xdr,
+} from '@stellar/stellar-sdk';
 import { createKit } from './kit';
 import { getConfig } from './config';
 
@@ -13,7 +23,7 @@ type LogEntry = {
   timestamp: string;
 };
 
-type Operation = 'restore' | 'reauth' | 'create' | 'connect' | 'transfer' | 'disconnect';
+type Operation = 'restore' | 'reauth' | 'create' | 'connect' | 'transfer' | 'fund' | 'disconnect';
 type PluginErrorCode =
   | 'UNKNOWN_ERROR'
   | 'CANCELLED'
@@ -56,10 +66,16 @@ const REAUTH_TIMEOUT_MS = 30_000;
 const CREATE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const TRANSFER_TIMEOUT_MS = 60_000;
+const FUND_TIMEOUT_MS = 90_000;
 const DISCONNECT_TIMEOUT_MS = 10_000;
 const BALANCE_TIMEOUT_MS = 15_000;
 const SESSION_SNAPSHOT_KEY = 'smart-account-demo:session-snapshot:v1';
 const STROOPS_PER_XLM = 10_000_000n;
+const TESTNET_FUND_AMOUNT_XLM = 100;
+const FRIEND_BOT_URL = 'https://friendbot.stellar.org';
+const FUND_ACCOUNT_LOOKUP_ATTEMPTS = 8;
+const FUND_TRANSFER_ATTEMPTS = 6;
+const FUND_RETRY_DELAY_MS = 1_500;
 
 class OperationTimeoutError extends Error {
   readonly operation: Operation;
@@ -178,6 +194,12 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   });
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function normalizeErrorMessage(operation: Operation, error: unknown): string {
   if (error instanceof OperationTimeoutError) {
     switch (error.operation) {
@@ -191,6 +213,8 @@ function normalizeErrorMessage(operation: Operation, error: unknown): string {
         return 'Wallet connection timed out. Try Connect Wallet again.';
       case 'transfer':
         return 'Transfer timed out before confirmation. Check network status and retry.';
+      case 'fund':
+        return 'Funding timed out. Check Friendbot/RPC connectivity and retry.';
       case 'disconnect':
         return 'Disconnect timed out. Try again.';
       default:
@@ -294,6 +318,76 @@ function isMissingBalanceError(error: unknown): boolean {
   );
 }
 
+function parseBigIntLike(value: unknown): bigint | null {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+
+  if (typeof value === 'string' && value.length > 0) {
+    try {
+      return BigInt(value);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function parseBalanceScVal(value: xdr.ScVal): bigint {
+  if (value.switch().name === 'scvI128') {
+    const i128 = value.i128();
+    const hi = BigInt(i128.hi().toString());
+    const lo = BigInt(i128.lo().toString());
+    return (hi << 64n) + lo;
+  }
+
+  if (value.switch().name === 'scvU128') {
+    const u128 = value.u128();
+    const hi = BigInt(u128.hi().toString());
+    const lo = BigInt(u128.lo().toString());
+    return (hi << 64n) + lo;
+  }
+
+  if (value.switch().name === 'scvI64') {
+    return BigInt(value.i64().toString());
+  }
+
+  if (value.switch().name === 'scvU64') {
+    return BigInt(value.u64().toString());
+  }
+
+  if (value.switch().name === 'scvI32') {
+    return BigInt(value.i32());
+  }
+
+  if (value.switch().name === 'scvU32') {
+    return BigInt(value.u32());
+  }
+
+  if (value.switch().name === 'scvVoid') {
+    return 0n;
+  }
+
+  if (value.switch().name === 'scvMap') {
+    const native = scValToNative(value) as unknown;
+    if (typeof native === 'object' && native !== null) {
+      const amountValue = (native as { amount?: unknown }).amount;
+      const amount = parseBigIntLike(amountValue);
+      if (amount !== null) {
+        return amount;
+      }
+    }
+    throw new Error('Unexpected scvMap shape for balance value');
+  }
+
+  throw new Error(`Unexpected balance value type: ${value.switch().name}`);
+}
+
 async function fetchNativeBalanceXlm(
   rpcUrl: string,
   nativeTokenContract: string,
@@ -313,52 +407,155 @@ async function fetchNativeBalanceXlm(
       'balance query',
     );
     const value = balanceData.val.contractData().val();
-
-    if (value.switch().name === 'scvI128') {
-      const i128 = value.i128();
-      const hi = BigInt(i128.hi().toString());
-      const lo = BigInt(i128.lo().toString());
-      const stroops = (hi << 64n) + lo;
-      return formatStroopsAsXlm(stroops);
-    }
-
-    if (value.switch().name === 'scvU128') {
-      const u128 = value.u128();
-      const hi = BigInt(u128.hi().toString());
-      const lo = BigInt(u128.lo().toString());
-      const stroops = (hi << 64n) + lo;
-      return formatStroopsAsXlm(stroops);
-    }
-
-    if (value.switch().name === 'scvI64') {
-      return formatStroopsAsXlm(BigInt(value.i64().toString()));
-    }
-
-    if (value.switch().name === 'scvU64') {
-      return formatStroopsAsXlm(BigInt(value.u64().toString()));
-    }
-
-    if (value.switch().name === 'scvI32') {
-      return formatStroopsAsXlm(BigInt(value.i32()));
-    }
-
-    if (value.switch().name === 'scvU32') {
-      return formatStroopsAsXlm(BigInt(value.u32()));
-    }
-
-    if (value.switch().name === 'scvVoid') {
-      return '0';
-    }
-
-    {
-      throw new Error(`Unexpected balance value type: ${value.switch().name}`);
-    }
+    return formatStroopsAsXlm(parseBalanceScVal(value));
   } catch (error) {
     if (isMissingBalanceError(error)) {
       return '0';
     }
     throw new Error(getUnknownErrorMessage(error, 'Failed to load balance'));
   }
+}
+
+function xlmToStroops(value: number): bigint {
+  return BigInt(Math.round(value * Number(STROOPS_PER_XLM)));
+}
+
+function isRetriableFundingError(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes('account not found') ||
+    text.includes('not found') ||
+    text.includes('hosterror') ||
+    text.includes('error(contract, #6)') ||
+    text.includes('insufficient') ||
+    text.includes('missingvalue') ||
+    text.includes('resource missing') ||
+    text.includes('tx_bad_seq')
+  );
+}
+
+type FriendbotFundResult =
+  | { success: true; amount: number }
+  | { success: false; error: string };
+
+async function fundWalletViaFriendbot(
+  rpcUrl: string,
+  networkPassphrase: string,
+  nativeTokenContract: string,
+  destinationContractId: string,
+): Promise<FriendbotFundResult> {
+  if (!networkPassphrase.includes('Test')) {
+    return { success: false, error: 'Friendbot funding only works on testnet.' };
+  }
+
+  const server = new rpc.Server(rpcUrl);
+  const tempKeypair = Keypair.random();
+
+  const friendbotResponse = await fetch(`${FRIEND_BOT_URL}?addr=${tempKeypair.publicKey()}`);
+  if (!friendbotResponse.ok) {
+    const body = await friendbotResponse.text().catch(() => '');
+    return { success: false, error: `Friendbot request failed (${friendbotResponse.status}): ${body}` };
+  }
+
+  const sourcePublicKey = tempKeypair.publicKey();
+  let sourceAccount: Awaited<ReturnType<typeof server.getAccount>> | null = null;
+  let lastLookupError = '';
+
+  for (let attempt = 1; attempt <= FUND_ACCOUNT_LOOKUP_ATTEMPTS; attempt += 1) {
+    try {
+      sourceAccount = await withTimeout(
+        server.getAccount(sourcePublicKey),
+        15_000,
+        `friendbot source account lookup #${attempt}`,
+      );
+      break;
+    } catch (error) {
+      lastLookupError = getUnknownErrorMessage(error, 'unknown account lookup error');
+      if (attempt < FUND_ACCOUNT_LOOKUP_ATTEMPTS) {
+        await sleep(FUND_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+
+  if (!sourceAccount) {
+    return { success: false, error: `Account not found: ${sourcePublicKey} (${lastLookupError})` };
+  }
+
+  const tokenContract = new Contract(nativeTokenContract);
+  const amountStroops = xlmToStroops(TESTNET_FUND_AMOUNT_XLM);
+
+  let lastFundingError = 'Funding failed.';
+  for (let attempt = 1; attempt <= FUND_TRANSFER_ATTEMPTS; attempt += 1) {
+    try {
+      sourceAccount = await withTimeout(
+        server.getAccount(sourcePublicKey),
+        15_000,
+        `fund source refresh #${attempt}`,
+      );
+
+      const transaction = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(
+          tokenContract.call(
+            'transfer',
+            nativeToScVal(sourcePublicKey, { type: 'address' }),
+            nativeToScVal(destinationContractId, { type: 'address' }),
+            nativeToScVal(amountStroops, { type: 'i128' }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const preparedTx = await withTimeout(
+        server.prepareTransaction(transaction),
+        30_000,
+        `fund prepare #${attempt}`,
+      );
+      preparedTx.sign(tempKeypair);
+
+      const sendResult = await withTimeout(
+        server.sendTransaction(preparedTx),
+        30_000,
+        `fund submit #${attempt}`,
+      );
+      if (sendResult.status === 'ERROR') {
+        const sendError = sendResult.errorResult?.toXDR('base64') ?? 'Funding transaction submission failed.';
+        lastFundingError = sendError;
+        if (attempt < FUND_TRANSFER_ATTEMPTS && isRetriableFundingError(sendError)) {
+          await sleep(FUND_RETRY_DELAY_MS * attempt);
+          continue;
+        }
+        return { success: false, error: sendError };
+      }
+
+      const polled = await withTimeout(
+        server.pollTransaction(sendResult.hash, { attempts: 12 }),
+        60_000,
+        `fund poll #${attempt}`,
+      );
+      if (polled.status === 'SUCCESS') {
+        return { success: true, amount: TESTNET_FUND_AMOUNT_XLM };
+      }
+
+      lastFundingError = `Funding transaction status: ${polled.status}`;
+      if (attempt < FUND_TRANSFER_ATTEMPTS && isRetriableFundingError(lastFundingError)) {
+        await sleep(FUND_RETRY_DELAY_MS * attempt);
+        continue;
+      }
+      return { success: false, error: lastFundingError };
+    } catch (error) {
+      lastFundingError = getUnknownErrorMessage(error, 'Funding failed.');
+      if (attempt < FUND_TRANSFER_ATTEMPTS && isRetriableFundingError(lastFundingError)) {
+        await sleep(FUND_RETRY_DELAY_MS * attempt);
+        continue;
+      }
+      return { success: false, error: lastFundingError };
+    }
+  }
+
+  return { success: false, error: lastFundingError };
 }
 
 function readSessionSnapshot(): SessionSnapshot | null {
@@ -455,8 +652,14 @@ export function App() {
     }
   };
 
-  const refreshBalance = async (targetContractId: string, logErrors: boolean = false) => {
-    setBalance({ status: 'loading' });
+  const refreshBalance = async (
+    targetContractId: string,
+    logErrors: boolean = false,
+    showLoading: boolean = true,
+  ) => {
+    if (showLoading) {
+      setBalance({ status: 'loading' });
+    }
 
     try {
       const valueXlm = await fetchNativeBalanceXlm(
@@ -471,11 +674,24 @@ export function App() {
       });
     } catch (error) {
       const message = getUnknownErrorMessage(error, 'Failed to load balance');
-      setBalance({ status: 'error', error: message });
+      if (showLoading || logErrors) {
+        setBalance({ status: 'error', error: message });
+      }
       if (logErrors) {
         pushLog(`balance: ${message}`, 'error');
       }
     }
+  };
+
+  const refreshBalanceAfterSettlement = (targetContractId: string) => {
+    void refreshBalance(targetContractId);
+    void (async () => {
+      const retryDelaysMs = [1_500, 3_000, 5_000];
+      for (const delayMs of retryDelaysMs) {
+        await sleep(delayMs);
+        await refreshBalance(targetContractId, false, false);
+      }
+    })();
   };
 
   useEffect(() => {
@@ -632,8 +848,6 @@ export function App() {
       const result = await withOperationTimeout(
         kit.createWallet(config.rpName, trimmedName, {
           autoSubmit: true,
-          autoFund: true,
-          nativeTokenContract: config.nativeTokenContract,
         }),
         'create',
         CREATE_TIMEOUT_MS,
@@ -642,7 +856,7 @@ export function App() {
       setCredentialId(result.credentialId);
       writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
-      void refreshBalance(result.contractId);
+      refreshBalanceAfterSettlement(result.contractId);
 
       pushLog(`Wallet created: ${truncate(result.contractId)}`, 'success');
       if (result.submitResult?.success) {
@@ -651,11 +865,21 @@ export function App() {
       if (result.submitResult && !result.submitResult.success) {
         pushLog(`Deployment failed: ${result.submitResult.error ?? 'unknown deployment error'}`, 'error');
       }
-      if (result.fundResult?.success) {
-        pushLog(`Wallet funded: ${result.fundResult.amount ?? 'unknown'} XLM`, 'success');
-      }
-      if (result.fundResult && !result.fundResult.success) {
-        pushLog(`Funding failed: ${result.fundResult.error ?? 'unknown funding error'}`, 'error');
+      const fundResult = await withOperationTimeout(
+        fundWalletViaFriendbot(
+          config.rpcUrl,
+          config.networkPassphrase,
+          config.nativeTokenContract,
+          result.contractId,
+        ),
+        'fund',
+        FUND_TIMEOUT_MS,
+      );
+      if (fundResult.success) {
+        pushLog(`Wallet funded: ${fundResult.amount} XLM`, 'success');
+        refreshBalanceAfterSettlement(result.contractId);
+      } else {
+        pushLog(`Funding failed: ${fundResult.error}`, 'error');
       }
     });
 
@@ -674,7 +898,7 @@ export function App() {
       setCredentialId(result.credentialId);
       writeSessionSnapshot(result.contractId, result.credentialId);
       setTransferState({ status: 'idle' });
-      void refreshBalance(result.contractId);
+      refreshBalanceAfterSettlement(result.contractId);
       pushLog(`Connected wallet: ${truncate(result.contractId)}`, 'success');
     });
 
@@ -705,7 +929,7 @@ export function App() {
           'success',
         );
         if (contractId) {
-          void refreshBalance(contractId);
+          refreshBalanceAfterSettlement(contractId);
         }
         return;
       }
@@ -731,6 +955,31 @@ export function App() {
       setTransferState({ status: 'idle' });
       setBalance({ status: 'idle' });
       pushLog('Disconnected from wallet.', 'success');
+    });
+
+  const handleFundWallet = () =>
+    runOperation('fund', async () => {
+      if (!contractId) {
+        throw new Error('No wallet connected.');
+      }
+
+      const result = await withOperationTimeout(
+        fundWalletViaFriendbot(
+          config.rpcUrl,
+          config.networkPassphrase,
+          config.nativeTokenContract,
+          contractId,
+        ),
+        'fund',
+        FUND_TIMEOUT_MS,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error ?? 'Funding failed');
+      }
+
+      pushLog(`Wallet funded: ${result.amount ?? 'unknown'} XLM`, 'success');
+      refreshBalanceAfterSettlement(contractId);
     });
 
   const isBusy = busy !== null;
@@ -787,6 +1036,10 @@ export function App() {
 
           <button onClick={handleTransfer} disabled={isBusy || !isConnected}>
             {busy === 'transfer' ? 'Sending...' : 'Send Transfer'}
+          </button>
+
+          <button onClick={handleFundWallet} disabled={isBusy || !isConnected}>
+            {busy === 'fund' ? 'Funding...' : 'Fund Wallet (Testnet)'}
           </button>
 
           <button onClick={handleDisconnect} disabled={isBusy || !isConnected}>
