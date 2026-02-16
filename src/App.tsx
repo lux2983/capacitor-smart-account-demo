@@ -169,6 +169,7 @@ export function App() {
   const [contractId, setContractId] = useState<string | null>(null);
   const [credentialId, setCredentialId] = useState<string | null>(null);
   const [busy, setBusy] = useState<Operation | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [transferState, setTransferState] = useState<TransferState>({ status: 'idle' });
@@ -200,7 +201,7 @@ export function App() {
     let cancelled = false;
 
     const restore = async () => {
-      setBusy('restore');
+      setRestoring(true);
 
       try {
         const storage = new CapacitorStorageAdapter('smart-account-demo');
@@ -222,14 +223,21 @@ export function App() {
         if (hadExpiredSession) {
           pushLog('Previous session expired. Requesting interactive passkey authentication.', 'info');
           setBusy('reauth');
-          const prompted = await kit.connectWallet({ prompt: true, fresh: true });
-          if (prompted) {
-            setContractId(prompted.contractId);
-            setCredentialId(prompted.credentialId);
-            pushLog(`Reconnected after session expiry: ${truncate(prompted.contractId)}`, 'success');
-          } else {
-            pushLog('No wallet selected after session expiry.', 'error');
+          try {
+            const prompted = await kit.connectWallet({ prompt: true, fresh: true });
+            if (prompted) {
+              setContractId(prompted.contractId);
+              setCredentialId(prompted.credentialId);
+              pushLog(`Reconnected after session expiry: ${truncate(prompted.contractId)}`, 'success');
+            } else {
+              pushLog('No wallet selected after session expiry.', 'error');
+            }
+          } finally {
+            if (!cancelled) {
+              setBusy(null);
+            }
           }
+
           return;
         }
 
@@ -242,7 +250,7 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
-          setBusy(null);
+          setRestoring(false);
         }
       }
     };
@@ -345,6 +353,7 @@ export function App() {
 
         {errorBanner ? <p className="banner error">{errorBanner}</p> : null}
         {busy ? <p className="banner info">Running: {busy}</p> : null}
+        {!busy && restoring ? <p className="banner info">Restoring previous session...</p> : null}
 
         <div className="grid">
           <label>
