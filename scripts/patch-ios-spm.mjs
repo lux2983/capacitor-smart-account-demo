@@ -41,3 +41,13 @@ patchFile(
       ),
   'Patched capacitor-passkey-plugin iOS enum cases for Xcode compatibility.',
 );
+
+const passkeyPackageSwiftPath = resolve('node_modules/capacitor-passkey-plugin/Package.swift');
+patchFile(
+  passkeyPackageSwiftPath,
+  (content) => content.replace(
+    '.package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "7.0.0")',
+    '.package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.0.0")',
+  ),
+  'Patched capacitor-passkey-plugin SPM dependency to capacitor-swift-pm 8.x.',
+);

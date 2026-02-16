@@ -16,8 +16,8 @@
     "verify:android": "cd android && ./gradlew assembleDebug && cd .."
   },
   "dependencies": {
-    "@capacitor/core": "7.5.0",
-    "@capacitor/preferences": "7.0.1",
+    "@capacitor/core": "8.0.0",
+    "@capacitor/preferences": "8.0.0",
     "@stellar/stellar-sdk": "^14.4.3",
     "buffer": "^6.0.3",
     "capacitor-passkey-plugin": "^0.0.5",
@@ -26,9 +26,9 @@
     "smart-account-kit": "^0.2.9"
   },
   "devDependencies": {
-    "@capacitor/android": "7.5.0",
-    "@capacitor/cli": "7.5.0",
-    "@capacitor/ios": "7.5.0",
+    "@capacitor/android": "8.0.0",
+    "@capacitor/cli": "8.0.0",
+    "@capacitor/ios": "8.0.0",
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",
