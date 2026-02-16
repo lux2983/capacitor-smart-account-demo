@@ -258,6 +258,42 @@ export function App() {
   };
 
   useEffect(() => {
+    const appendEventLog = (message: string, type: LogType) => {
+      setLogs((current) => [{ message, type, timestamp: nowTime() }, ...current].slice(0, MAX_LOGS));
+    };
+
+    const unsubscribers = [
+      kit.events.on('credentialCreated', ({ credential }) => {
+        appendEventLog(`event: credentialCreated (${truncate(credential.credentialId)})`, 'info');
+      }),
+      kit.events.on('walletConnected', ({ contractId, credentialId }) => {
+        appendEventLog(
+          `event: walletConnected (${truncate(contractId)} / ${truncate(credentialId)})`,
+          'success',
+        );
+      }),
+      kit.events.on('transactionSubmitted', ({ hash, success }) => {
+        appendEventLog(
+          `event: transactionSubmitted (${success ? 'success' : 'failed'} / ${hash})`,
+          success ? 'success' : 'error',
+        );
+      }),
+      kit.events.on('sessionExpired', ({ contractId, credentialId }) => {
+        appendEventLog(
+          `event: sessionExpired (${truncate(contractId)} / ${truncate(credentialId)})`,
+          'info',
+        );
+      }),
+    ];
+
+    return () => {
+      for (const unsubscribe of unsubscribers) {
+        unsubscribe();
+      }
+    };
+  }, [kit]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const restore = async () => {
